@@ -52,14 +52,16 @@ pub fn send_file(address: &str, path: &Path) -> io::Result<()> {
             "filename too long",
         ));
     }
+    let size = fs::metadata(path)?.len();
+    let checksum = crc32_file(path)?;
     let mut file = File::open(path)?;
-    let size = file.metadata()?.len();
     let mut stream = TcpStream::connect(address)?;
     stream.set_nodelay(true)?;
     stream.write_all(&FILE_MAGIC)?;
     stream.write_all(&(name.len() as u16).to_le_bytes())?;
     stream.write_all(name)?;
     stream.write_all(&size.to_le_bytes())?;
+    stream.write_all(&checksum.to_le_bytes())?;
     io::copy(&mut file, &mut stream)?;
     Ok(())
 }
@@ -99,9 +101,13 @@ fn receive_file(stream: &mut TcpStream, directory: &Path) -> io::Result<()> {
     let mut raw_size = [0; 8];
     stream.read_exact(&mut raw_size)?;
     let mut remaining = u64::from_le_bytes(raw_size);
+    let mut raw_checksum = [0; 4];
+    stream.read_exact(&mut raw_checksum)?;
+    let expected_checksum = u32::from_le_bytes(raw_checksum);
     let target = directory.join(safe_name);
     let temporary = directory.join(format!("{}.keyless-part", safe_name.to_string_lossy()));
     let mut output = File::create(&temporary)?;
+    let mut crc = Crc32::new();
     let mut buffer = [0; 64 * 1024];
     while remaining > 0 {
         let wanted = remaining.min(buffer.len() as u64) as usize;
@@ -113,9 +119,86 @@ fn receive_file(stream: &mut TcpStream, directory: &Path) -> io::Result<()> {
             ));
         }
         output.write_all(&buffer[..received])?;
+        crc.update(&buffer[..received]);
         remaining -= received as u64;
     }
     drop(output);
-    fs::rename(temporary, target)?;
+    if crc.finish() != expected_checksum {
+        let _ = fs::remove_file(&temporary);
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "file checksum did not match",
+        ));
+    }
+    fs::rename(temporary, available_path(target))?;
     Ok(())
+}
+
+fn available_path(mut target: std::path::PathBuf) -> std::path::PathBuf {
+    if !target.exists() {
+        return target;
+    }
+    let parent = target.parent().unwrap_or_else(|| Path::new(".")).to_owned();
+    let stem = target
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let extension = target
+        .extension()
+        .map(|value| format!(".{}", value.to_string_lossy()))
+        .unwrap_or_default();
+    for index in 1..10_000 {
+        target = parent.join(format!("{stem} ({index}){extension}"));
+        if !target.exists() {
+            return target;
+        }
+    }
+    target
+}
+
+fn crc32_file(path: &Path) -> io::Result<u32> {
+    let mut file = File::open(path)?;
+    let mut buffer = [0; 64 * 1024];
+    let mut crc = Crc32::new();
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(crc.finish());
+        }
+        crc.update(&buffer[..read]);
+    }
+}
+
+struct Crc32(u32);
+impl Crc32 {
+    fn new() -> Self {
+        Self(0xffff_ffff)
+    }
+    fn update(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 ^= *byte as u32;
+            for _ in 0..8 {
+                self.0 = if self.0 & 1 == 1 {
+                    (self.0 >> 1) ^ 0xedb8_8320
+                } else {
+                    self.0 >> 1
+                };
+            }
+        }
+    }
+    fn finish(self) -> u32 {
+        !self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Crc32;
+    #[test]
+    fn crc32_matches_standard_vector() {
+        let mut crc = Crc32::new();
+        crc.update(b"123456789");
+        assert_eq!(crc.finish(), 0xcbf4_3926);
+    }
 }
