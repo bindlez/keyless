@@ -7,6 +7,12 @@ Windows setup window discovers nearby IPv4 devices, displays their hostname,
 IP and MAC, and lets you edit nicknames. Select exactly two computers and use
 **Use selected as host** for the computer with your keyboard and mouse.
 
+If discovery misses a PC, enter its IPv4 address or computer name in the box
+beside **Add IP / name**. Keyless does not need to be installed for discovery.
+Discovery prefers adapters with a gateway, combines ping replies with the ARP
+cache, and reports the interfaces it used. PCs on guest Wi-Fi or an isolated
+wireless network may not be able to communicate even if they use the same SSID.
+
 **Install selected** installs per-user copies and desktop shortcuts. Remote
 installation requires Windows remoting already configured on the destination,
 an administrator account, and that account's desktop session for the shortcut.

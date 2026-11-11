@@ -33,14 +33,31 @@ $install = New-Object Windows.Forms.Button
 $install.Text = 'Install selected (max 2)'; $install.SetBounds(16,405,225,40); $form.Controls.Add($install)
 $export = New-Object Windows.Forms.Button
 $export.Text = 'Create portable setup folder'; $export.SetBounds(255,405,240,40); $form.Controls.Add($export)
+$manual = New-Object Windows.Forms.TextBox
+$manual.SetBounds(510,415,240,25); $form.Controls.Add($manual)
+$add = New-Object Windows.Forms.Button
+$add.Text='Add IP / name'; $add.SetBounds(760,405,145,40); $form.Controls.Add($add)
 $log = New-Object Windows.Forms.TextBox
 $log.Multiline=$true; $log.ReadOnly=$true; $log.ScrollBars='Vertical'; $log.SetBounds(16,460,890,140); $form.Controls.Add($log)
 function Write-Status([string]$message) { $log.AppendText("$message`r`n"); [Windows.Forms.Application]::DoEvents() }
 $script:hostIP = ''
 $script:localIPs = @('127.0.0.1')
 function Add-PC($computer,$ip,$mac,$status,$selected=$false) {
+    if(@($grid.Rows | Where-Object { [string]$_.Cells['IP'].Value -eq $ip }).Count) { return }
     [void]$grid.Rows.Add($selected,$computer,$computer,$ip,$mac,$status)
 }
+$add.Add_Click({
+    try {
+        $value=$manual.Text.Trim()
+        if(!$value) { throw 'Enter the other PC IP address or computer name.' }
+        $addresses=@([Net.Dns]::GetHostAddresses($value) | Where-Object { $_.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork })
+        if(!$addresses.Count) { throw 'No IPv4 address found for that computer.' }
+        foreach($address in $addresses) {
+            Add-PC $value $address.IPAddressToString '' 'Manually added; reachability not verified'
+        }
+        Write-Status 'Added. Check this PC and the other PC, then choose the host. Manual entry does not bypass network isolation.'
+    } catch { Write-Status $_.Exception.Message }
+})
 function Selected-PCs {
     $grid.EndEdit() | Out-Null
     @($grid.Rows | Where-Object { $_.Cells['Install'].Value -eq $true })
@@ -50,16 +67,30 @@ $scan.Add_Click({
     try {
         $grid.Rows.Clear()
         Write-Status 'Discovering IPv4 neighbors. A missing PC can be asleep or block discovery.'
-        $adapters = @(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and $_.AddressState -eq 'Preferred' })
+        # .NET avoids requiring access to the Windows CIM provider. Prefer
+        # real LAN interfaces with a gateway over WSL/VPN virtual interfaces.
+        $adapters = @(foreach($nic in [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+            if($nic.OperationalStatus -ne 'Up' -or $nic.NetworkInterfaceType -eq 'Loopback') { continue }
+            $properties=$nic.GetIPProperties()
+            $gateway=@($properties.GatewayAddresses | Where-Object { $_.Address.AddressFamily -eq 'InterNetwork' -and $_.Address.ToString() -ne '0.0.0.0' }).Count -gt 0
+            foreach($unicast in $properties.UnicastAddresses) {
+                if($unicast.Address.AddressFamily -ne 'InterNetwork' -or $unicast.Address.ToString() -like '169.254.*') { continue }
+                [pscustomobject]@{IPAddress=$unicast.Address.ToString(); Name=$nic.Name; Gateway=$gateway; MAC=$nic.GetPhysicalAddress().ToString()}
+            }
+        })
+        $adapters=@($adapters | Sort-Object -Property @{Expression='Gateway';Descending=$true},Name)
         $script:localIPs = @('127.0.0.1') + @($adapters.IPAddress)
         $primary = $adapters | Select-Object -First 1
         if(!$primary) { throw 'No active IPv4 LAN adapter found.' }
         Add-PC $env:COMPUTERNAME $primary.IPAddress '' 'This PC' $true
         $script:hostIP=$primary.IPAddress; $hostLabel.Text="Default host: $script:hostIP"
+        foreach($adapter in $adapters) { Write-Status "Adapter: $($adapter.Name) — $($adapter.IPAddress), gateway: $($adapter.Gateway)" }
         # Probe at most the local /24 on each adapter, with asynchronous pings.
         # Wider subnets are intentionally bounded to keep setup quick.
         $probes=@()
-        foreach($prefix in @($adapters.IPAddress | ForEach-Object { $_ -replace '\.\d+$','' } | Select-Object -Unique)) {
+        $scanAdapters=@($adapters | Where-Object { $_.Gateway })
+        if(!$scanAdapters.Count) { $scanAdapters=$adapters }
+        foreach($prefix in @($scanAdapters.IPAddress | ForEach-Object { $_ -replace '\.\d+$','' } | Select-Object -Unique)) {
             foreach($i in 1..254) {
                 $ip="$prefix.$i"
                 if($ip -in $script:localIPs) { continue }
@@ -67,12 +98,25 @@ $scan.Add_Click({
                 $probes+= [pscustomobject]@{ IP=$ip; Ping=$ping; Task=$ping.SendPingAsync($ip,350) }
             }
         }
-        foreach($probe in $probes) { try { $null=$probe.Task.GetAwaiter().GetResult() } catch {} finally { $probe.Ping.Dispose() } }
-        $neighbors=@(Get-NetNeighbor -AddressFamily IPv4 | Where-Object { $_.State -in @('Reachable','Stale','Delay','Probe','Permanent') -and $_.LinkLayerAddress -ne 'FF-FF-FF-FF-FF-FF' -and $_.IPAddress -notin $script:localIPs })
-        foreach($neighbor in @($neighbors | Sort-Object IPAddress -Unique)) {
+        $found=@{}
+        foreach($probe in $probes) {
+            try {
+                $reply=$probe.Task.GetAwaiter().GetResult()
+                if($reply.Status -eq 'Success') { $found[$probe.IP]=[pscustomobject]@{IPAddress=$probe.IP;LinkLayerAddress='';Status='Responded to ping'} }
+            } catch {} finally { $probe.Ping.Dispose() }
+        }
+        # arp.exe works even when the NetNeighbor CIM provider is unavailable.
+        foreach($line in @(& arp.exe -a)) {
+            if($line -match '^\s*(\d+\.\d+\.\d+\.\d+)\s+([0-9a-fA-F-]{17})\s+') {
+                $ip=$Matches[1]; $mac=$Matches[2]
+                if($ip -in $script:localIPs -or $mac -eq 'ff-ff-ff-ff-ff-ff' -or $ip -match '^(22[4-9]|23\d)\.') { continue }
+                $found[$ip]=[pscustomobject]@{IPAddress=$ip;LinkLayerAddress=$mac;Status='LAN neighbor; may be cached'}
+            }
+        }
+        foreach($neighbor in @($found.Values | Sort-Object IPAddress)) {
             $ip=$neighbor.IPAddress; $computer=$ip
             try { $lookup=[Net.Dns]::GetHostEntryAsync($ip); if($lookup.Wait(150)) { $computer=$lookup.Result.HostName } } catch {}
-            Add-PC $computer $ip $neighbor.LinkLayerAddress 'Discovered; OS not verified'
+            Add-PC $computer $ip $neighbor.LinkLayerAddress $neighbor.Status
         }
         Write-Status 'Discovery complete. Check exactly two PCs. Remote installation requires existing WinRM access and administrator credentials. Nicknames are editable.'
     } catch { Write-Status $_.Exception.Message } finally { $scan.Enabled=$true }
