@@ -1,5 +1,33 @@
 # Keyless
 
+## Two-PC setup (0.2 preview)
+
+Download `downloads/keyless-windows-x64.exe` and double-click it. The native
+Windows setup window discovers nearby IPv4 devices, displays their hostname,
+IP and MAC, and lets you edit nicknames. Select exactly two computers and use
+**Use selected as host** for the computer with your keyboard and mouse.
+
+**Install selected** installs per-user copies and desktop shortcuts. Remote
+installation requires Windows remoting already configured on the destination,
+an administrator account, and that account's desktop session for the shortcut.
+It does not turn on remoting, bypass Windows security, or launch input injection
+inside the remote service session. Start each desktop shortcut locally.
+
+If remoting is unavailable, **Create portable setup folder** produces one folder
+to copy to both PCs with ready-to-run host and client launchers. A PC that has no
+Keyless receiver or Windows management channel needs this initial copy once.
+
+Discovery probes the local /24 on each IPv4 adapter and reads the neighbor
+cache. Sleeping, filtered, isolated or wider-subnet devices may be absent; it
+cannot guarantee an inventory of every PC. Hardware/OS details require an
+authenticated management session; setup reports the OS after remote install.
+
+This is a setup preview. The input engine still has known limitations: polling
+does not suppress local input, wheel capture is not implemented, and seamless
+edge return is pending. Sessions and file transfers currently lack authentication
+and encryption. Use only on a trusted private LAN. The roadmap below describes
+the intended finished product, not features already shipped.
+
 **Two computers. One keyboard and mouse.**
 
 Keyless makes a local AI machine behave like the next monitor in a desktop

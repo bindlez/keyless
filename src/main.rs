@@ -72,6 +72,22 @@ fn send_file(_: &str, _: &str) -> io::Result<()> {
 
 fn main() -> io::Result<()> {
     let a: Vec<_> = std::env::args().collect();
+    if a.len() == 1 || a.get(1).map(String::as_str) == Some("setup") {
+        let folder = std::env::temp_dir().join(format!("keyless-setup-{}", std::process::id()));
+        std::fs::create_dir_all(&folder)?;
+        let script = folder.join("setup.ps1");
+        std::fs::write(&script, include_str!("../setup.ps1"))?;
+        let status = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-STA", "-File"])
+            .arg(&script)
+            .arg("-SourceExe")
+            .arg(std::env::current_exe()?)
+            .status();
+        let _ = std::fs::remove_file(&script);
+        let _ = std::fs::remove_dir(&folder);
+        status?;
+        return Ok(());
+    }
     match a.get(1).map(String::as_str) {
         Some("host") => host(),
         Some("client") => match a.get(2) {

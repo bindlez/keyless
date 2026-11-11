@@ -71,9 +71,28 @@ pub fn capture(tx: Sender<InputEvent>) -> ! {
         let alt = unsafe { GetAsyncKeyState(0x12) < 0 };
         let space = unsafe { GetAsyncKeyState(0x20) < 0 };
         if ctrl && alt && space {
-            if !active {
-                active = true;
+            active = !active;
+            if active {
                 recenter(&mut prior);
+            } else {
+                for vk in 8..=254 {
+                    if keys[vk] {
+                        let _ = tx.send(InputEvent::Key {
+                            scan_code: vk as u16,
+                            down: false,
+                        });
+                        keys[vk] = false;
+                    }
+                }
+                for (index, down) in buttons.iter_mut().enumerate() {
+                    if *down {
+                        let _ = tx.send(InputEvent::Button {
+                            button: (index + 1) as u8,
+                            down: false,
+                        });
+                        *down = false;
+                    }
+                }
             }
             while unsafe { GetAsyncKeyState(0x20) < 0 } {
                 thread::sleep(Duration::from_millis(10));
@@ -105,7 +124,7 @@ pub fn capture(tx: Sender<InputEvent>) -> ! {
                 let down = unsafe { GetAsyncKeyState(vk) < 0 };
                 if down != keys[vk as usize] {
                     keys[vk as usize] = down;
-                    if vk != 0x11 && vk != 0x12 && vk != 0x20 {
+                    {
                         let _ = tx.send(InputEvent::Key {
                             scan_code: vk as u16,
                             down,
@@ -121,7 +140,7 @@ pub fn capture(tx: Sender<InputEvent>) -> ! {
                 recenter(&mut prior);
             }
         }
-        thread::sleep(Duration::from_millis(2));
+        thread::sleep(Duration::from_millis(if active { 2 } else { 12 }));
     }
 }
 fn recenter(point: &mut Point) {

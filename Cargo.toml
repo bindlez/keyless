@@ -1,6 +1,6 @@
 [package]
 name = "keyless"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Make two computers feel like one dual-monitor desktop."
 license = "MIT"
@@ -8,4 +8,11 @@ license = "MIT"
 [dependencies]
 
 [dev-dependencies]
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+opt-level = "s"
 
