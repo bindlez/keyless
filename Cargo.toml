@@ -1,0 +1,11 @@
+[package]
+name = "keyless"
+version = "0.1.0"
+edition = "2024"
+description = "Make two computers feel like one dual-monitor desktop."
+license = "MIT"
+
+[dependencies]
+
+[dev-dependencies]
+
