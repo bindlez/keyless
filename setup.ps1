@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$SourceExe)
+param([Parameter(Mandatory=$true)][string]$SourceExe,[switch]$SmokeTest)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -185,4 +185,5 @@ $export.Add_Click({
     } catch { Write-Status $_.Exception.Message }
 })
 Write-Status 'Click Discover PCs to begin. Discovery shows network-visible devices, including devices that may not run Windows.'
+if($SmokeTest) { Write-Output 'Keyless setup window initialized successfully.'; $form.Dispose(); return }
 [void]$form.ShowDialog()

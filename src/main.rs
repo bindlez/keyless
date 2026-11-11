@@ -72,20 +72,51 @@ fn send_file(_: &str, _: &str) -> io::Result<()> {
 
 fn main() -> io::Result<()> {
     let a: Vec<_> = std::env::args().collect();
-    if a.len() == 1 || a.get(1).map(String::as_str) == Some("setup") {
+    if a.len() == 1 || matches!(a.get(1).map(String::as_str), Some("setup" | "setup-check")) {
         let folder = std::env::temp_dir().join(format!("keyless-setup-{}", std::process::id()));
         std::fs::create_dir_all(&folder)?;
         let script = folder.join("setup.ps1");
-        std::fs::write(&script, include_str!("../setup.ps1"))?;
-        let status = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-STA", "-File"])
+        // Windows PowerShell 5.1 treats UTF-8 without a BOM as an ANSI file.
+        // The setup includes Unicode labels, so preserve its encoding explicitly.
+        let script_text = format!("\u{feff}{}", include_str!("../setup.ps1"));
+        std::fs::write(&script, script_text)?;
+        let mut command = std::process::Command::new("powershell.exe");
+        command
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-STA", "-File"])
             .arg(&script)
             .arg("-SourceExe")
-            .arg(std::env::current_exe()?)
-            .status();
+            .arg(std::env::current_exe()?);
+        if a.get(1).map(String::as_str) == Some("setup-check") {
+            command.arg("-SmokeTest");
+        }
+        let result = command.output();
         let _ = std::fs::remove_file(&script);
         let _ = std::fs::remove_dir(&folder);
-        status?;
+        match result {
+            Ok(output) if output.status.success() => {
+                print!("{}", String::from_utf8_lossy(&output.stdout));
+            }
+            result => {
+                let detail = match result {
+                    Ok(output) => format!(
+                        "{}\n{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    ),
+                    Err(error) => error.to_string(),
+                };
+                let log = std::env::temp_dir().join("keyless-startup-error.txt");
+                let _ = std::fs::write(&log, &detail);
+                let message = format!(
+                    "Keyless setup could not start.\n\n{detail}\n\nDetails saved to {}",
+                    log.display()
+                );
+                eprintln!("{message}");
+                #[cfg(windows)]
+                windows::show_error(&message);
+                return Err(io::Error::other("setup failed; see startup error log"));
+            }
+        }
         return Ok(());
     }
     match a.get(1).map(String::as_str) {

@@ -61,6 +61,21 @@ const WHEEL: u32 = 0x800;
 const HWHEEL: u32 = 0x1000;
 const KEYUP: u32 = 2;
 
+pub fn show_error(message: &str) {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn MessageBoxW(window: isize, text: *const u16, title: *const u16, flags: u32) -> i32;
+    }
+    let text: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
+    let title: Vec<u16> = "Keyless startup error"
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+    unsafe {
+        MessageBoxW(0, text.as_ptr(), title.as_ptr(), 0x10);
+    }
+}
+
 pub fn capture(tx: Sender<InputEvent>) -> ! {
     let mut active = false;
     let mut prior = Point { x: 0, y: 0 };
