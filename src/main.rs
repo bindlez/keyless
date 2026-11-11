@@ -3,10 +3,10 @@ mod protocol;
 mod router;
 #[cfg(windows)]
 mod windows;
-use std::{io, net::TcpListener, sync::mpsc};
+use std::{io, net::TcpListener, path::PathBuf, sync::mpsc};
 
 fn usage() -> ! {
-    eprintln!("Usage: keyless host | keyless client <HOST-IP>");
+    eprintln!("Usage: keyless host | keyless client <HOST-IP> | keyless send <AI-IP> <FILE>");
     std::process::exit(2)
 }
 #[cfg(windows)]
@@ -33,11 +33,26 @@ fn client(ip: &str) -> io::Result<()> {
     } else {
         format!("{ip}:{}", bridge::DEFAULT_PORT)
     };
+    let download_dir = std::env::current_dir()?.join("Keyless Files");
+    std::thread::spawn(move || {
+        let _ = bridge::receive_files(&download_dir);
+    });
     let mut stream = bridge::connect(&address)?;
     println!("Connected to {address}.");
     loop {
         windows::inject(bridge::receive(&mut stream)?);
     }
+}
+#[cfg(windows)]
+fn send_file(ip: &str, file: &str) -> io::Result<()> {
+    let address = if ip.contains(':') {
+        ip.to_owned()
+    } else {
+        format!("{ip}:{}", bridge::FILE_PORT)
+    };
+    bridge::send_file(&address, &PathBuf::from(file))?;
+    println!("Sent {file} to {ip}.");
+    Ok(())
 }
 #[cfg(not(windows))]
 fn host() -> io::Result<()> {
@@ -50,6 +65,10 @@ fn host() -> io::Result<()> {
 fn client(_: &str) -> io::Result<()> {
     host()
 }
+#[cfg(not(windows))]
+fn send_file(_: &str, _: &str) -> io::Result<()> {
+    host()
+}
 
 fn main() -> io::Result<()> {
     let a: Vec<_> = std::env::args().collect();
@@ -58,6 +77,10 @@ fn main() -> io::Result<()> {
         Some("client") => match a.get(2) {
             Some(ip) => client(ip),
             None => usage(),
+        },
+        Some("send") => match (a.get(2), a.get(3)) {
+            (Some(ip), Some(file)) => send_file(ip, file),
+            _ => usage(),
         },
         _ => usage(),
     }
